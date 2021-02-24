@@ -1,0 +1,435 @@
+---
+title: "R로 하는 서울시 문화공간 분포 데이터 분석, 1편"
+author: "DevGu"
+date: "2021년 2월 24일"
+output: html_document
+---
+<style>
+body{
+  font-family: Infinity Sans Regular;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+###키워드: R마크다운, R leaflet, R 지도, R 분석, R 시각화, 군집분석
+  
+---
+목차
+1) 서론
+2) 라이브러리 및 데이터 로딩, 전처리
+3) 지도 시각화 및 데이터 확인
+4) K-means 군집분석
+---
+
+<br><br>
+
+***
+
+##1) 서론
+  
+서울에서 사는 것의 가장 큰 장점은 무엇일까요?  
+많은 사람들이 멀지 않은 거리에 다양하고 깊이있는 문화 체험의 공간들이 접근 가능하다는 것을 서울 생활의 장점으로 꼽고는 합니다. 
+
+  오늘은 서울 열린데이터광장에서 제공하는 <서울시 문화공간 현황> 데이터를 함께 살펴보면서,   
+서울시 및 근교에 문화 시설이 어떻게 분포해있는지 함께 알아보는 시간을 가지도록 하겠습니다:)
+<br><br><br><br>
+***
+##2) 라이브러리 및 데이터 로딩, 전처리
+<br><br>
+먼저 필요한 패키지를 로딩합니다. 대부분 geocoding과 관련된 패키지이며, font처리를 위한 extrafont 패키지, cluster 분석을 위한 패키지 등이 포함되어 있습니다.
+<br>
+
+```{r message = F}
+require(knitr)
+require(htmlwidgets)
+require(ggplot2)
+require(extrafont)
+require(plotly)
+require(ggmap)
+require(rgeos)
+require(maptools)
+require(rgdal)
+require(dplyr)
+require(raster)
+require(leaflet)
+require(leafletCN)
+require(stringr)
+require(DT)
+require(cluster)
+require(ggthemes)
+```
+<br><br>
+다음으로는 미리 받아 둔 csv 파일을 가져오도록 하겠습니다. 
+인코딩은 'euc-kr'을 사용합니다.
+
+```{r}
+cultures <- read.csv("C:/datasets/Cultures/cultures.csv", 
+                     encoding = "euc-kr")
+
+```
+<br><br>
+어떠한 변수들이 있는지 먼저 한 번 확인해 봅시다.  
+
+```{r}
+str(cultures)
+datatable(cultures, filter = 'top')
+```
+<br><br>
+이 중에 오늘 분석에 필요한 변수들은 다음과 같습니다.
+
+
+|변수명|설명|
+|:----------:|---------------------:|
+|문화공간명|해당 공간 및 사업체 이름|
+|장르분류명|9개 카테고리로 분류된 문화 공간(예: 공연장)|
+|주소|해당 공간의 주소(도로명)|
+|X좌표|위도(latitude)|
+|Y좌표|경도(longitude)|
+  
+<br><br>
+***
+  
+여기서 오늘 주어진 데이터의 첫 문제점을 발견했습니다. x,y좌표, 즉 위경도를 이용하여 시각화를 진행해야 하는데, x좌표값이 이상하게 주어진 케이스가 몇 가지 있었습니다. 예를 들면 다음과 같이 말이죠.
+
+```{r}
+print(cultures$X[806])
+```
+<br>
+x좌표값인데 주소가 잘못 들어갔죠? 아마도 데이터 입력 과정에서 실수가 있었던 것으로 보입니다. 그래서 고민하던 중, 주소 변수에 있는 값을 이용해서 x,y좌표값을 받아오기로 했습니다. ggmap 패키지의 geocode 함수를 이용하면, 해당 주소를 구글에서 검색하여 위경도 값을 반환받을 수 있습니다.
+<br>
+그런데 이 과정에서 다시 한 번 문제가 발견했습니다. 바로 주소값 또한 잘못들어간 경우가 있었던 것이죠 ㅠㅠ(~~역시 데이터분석은 전처리가 95%~~). 예시로 다음과 같은 경우가 있었습니다.
+
+```{r}
+print(cultures$주소[3])
+print(cultures$주소[905])
+```
+첫번째는 정상적으로 입력되어 구글에서 검색이 가능한 케이스, 후자는 중랑구까지만 주소가 입력되어 정확한 위경도 값을 찾을 수 없는 케이스입니다. 이 상황에서 취할 수 있는 조치가 무엇이 있을까요? 공간명을 이용하여 구글에서 주소를 자동으로 검색해 오는 방법이 있을 수 있겠지만, 여기서는 케이스가 그렇게 많지는 않기 때문에 수작업으로 노가다(...)를 진행했습니다(혹시 이 부분에서 도움이 될 만한 소스가 있으신 분들은 댓글로 알려주시면 감사하겠습니다 ㅎㅎ)
+<br><br>
+<details>
+  <summary>주소 전처리 내용 확인하기</summary>  
+
+```{r}
+
+        #방법1. 개별적 처리
+        cultures$주소[51] <- '서울특별시 중구 장충동2가 １９３−５' #PARADISE ZIP
+        cultures$주소[55] <- '서울특별시 용산구 백범로 329' #용산꿈나무종합타운
+        cultures$주소[57] <- '서울특별시 송파구 잠실6동 올림픽로 300' #롯데콘서트홀
+        cultures$주소[61] <- '서울 노원구 덕릉로 460 마들근린공원' #노원에코센터
+        cultures$주소[83] <- '서울특별시 양천구 목1동 목동서로 201 kt정보전산센터' #KT챔버홀
+        cultures$주소[84] <- "서울특별시 도봉구 창동 1-9" #플랫폼 창동 61
+        cultures$주소[94] <- '서울특별시 광진구 능동로 209 세종대학교' #세종대 컨벤션센터
+        cultures$주소[115] <- '서울특별시 마포구 대흥동 대흥로20길 28' #마포문화재단
+        cultures$주소[130] <- '서울특별시 광진구 광장동 구천면로 14' #광진구민체육센터
+        cultures$주소[140] <- '서울시 서초구 효령로 72길 60' #한전아트센터
+        cultures$주소[154] <- '서울특별시 광진구 광장동 구천면로 20' #서울악스
+        cultures$주소[180] <- '서울특별시 광진구 구의동 천호대로 664' #유니버설아트센터
+        cultures$주소[189] <- '서울특별시 강남구 청담동 22-13' #유시어터
+        cultures$주소[224] <- '서울특별시 중구 저동1가 삼일대로9길 12' #삼일로 창고극장
+        cultures$주소[225] <- '서울특별시 강남구 삼성동 170-5' #백암아트홀
+        cultures$주소[228] <- '서울특별시 강동구 암사동 올림픽로 875' #서울 암사동 유적
+        cultures$주소[231] <- '서울특별시 송파구 오륜동 올림픽로 424' #우리금융아트홀
+        cultures$주소[243] <- '서울특별시 동대문구 청량리동 산1-217' #수림아트센터
+        cultures$주소[261] <- '서울특별시 서초구 내곡동 1-376' #한국분재박물관
+        cultures$주소[263] <- '서울특별시 종로구 원서동 108-4' #한국미술박물관
+        cultures$주소[264] <- '경기도 과천시 주암동 184-2' #과천시 추사박물관
+        cultures$주소[275] <- '서울특별시 서대문구 현저동 통일로 251' #서대문형무소역사관
+        cultures$주소[284] <- '서울특별시 강남구 언주로 827' #코리아나 화장박물관관
+        cultures$주소[321] <- '서울특별시 종로구 평창동 499-3' #영인박물관
+        cultures$주소[338] <- '서울특별시 중구 정동 정동길 26' #이화여고 100주년 기념관
+        cultures$주소[344] <- '서울특별시 서대문구 연희동 연희로32길 51' #서대문 자연사 박물관
+        cultures$주소[393] <- '서울특별시 성북구 성북동 성북로 134' #성북구립미술관
+        cultures$주소[396] <- '서울특별시 서초구 중앙로 555' #유리지공예관
+        cultures$주소[473] <- '서울특별시 중구 소공동 세종대로 55' #로댕갤러리
+        cultures$주소[502] <- '서울특별시 강북구 수유동 360-10' #강북 문화예술회관
+        cultures$주소[508] <- '서울특별시 서초구 양재동 201-1' #서울교육문화회관
+        cultures$주소[515] <- '서울시 송파구 송파대로 384' #송파마을예술창작소
+        cultures$주소[518] <- '서울특별시 광진구 자양4동 아차산로 200' #커먼그라운드
+        cultures$주소[533] <- '서울특별시 도봉구 창4동 노해로 132' #창동스포츠문화컴플렉스
+        cultures$주소[534] <- '서울특별시 금천구 시흥동 937-10' #금천문화원
+        cultures$주소[535] <- '서울특별시 영등포구 영등포동 582-3' #영등포문화원
+        cultures$주소[539] <- '서울특별시 노원구 공릉1동 동일로197길 24' #노원문화원
+        cultures$주소[548] <- '서울특별시 영등포구 문래동1가 30' #문래예술공장
+        cultures$주소[562] <- '서울특별시 송파구 잠실동 올림픽로 240' #롯데월드 아이스링크
+        cultures$주소[597] <- '서울특별시 동대문구 이문1동 천장산9길 68' #이문 어린이 도서관
+        
+        
+        #방법2. 위치정보를 담고 있는 벡터 생성하여 처리
+        a <- c(602, 608, 615, 618, 633, 634, 635, 639, 648, 662, 681, 697)
+        cultures$주소[a] <- c('서울특별시 강서구 등촌동 등촌로51나길 29',
+                              '서울특별시 용산구 서계동 청파로93길 27',
+                              '서울특별시 금천구 시흥동 267-9',
+                            '서울특별시 구로구 개봉동 105-24',
+                            '서울특별시 용산구 후암동 소월로 109',
+                            '서울특별시 종로구 사직동 인왕산로1길 25',
+                            '서울특별시 강남구 역삼1동 역삼로7길 16',
+                            '서울특별시 금천구 독산동 독산로54길 114',
+                            '서울특별시 송파구 거여동 거마로2길 19',
+                            '서울특별시 강남구 역삼동 테헤란로7길 21',
+                            '서울특별시 송파구 거여동길 273',
+                            '서울특별시 성북구 종암동 21가길 36-1')
+        
+        a <- c(712, 727, 728, 730, 755, 785, 789, 800)
+        cultures$주소[a] <- c('서울특별시 중구 장교동 1',
+                            '서울특별시 광진구 광장동 구천면로 2',
+                            '서울특별시 광진구 자양1동 자양로 117',
+                            '서울 동대문구 천호대로4길 21',
+                            '경기도 파주시 운정1동 와석순환로 415',
+                            '경기 하남시 미사대로 505',
+                            '서울 중랑구 망우로55길 19',
+                            '서울특별시 중구 덕수궁길 15 '
+                            )
+        
+        a <- c(814, 816, 820, 821, 854, 864, 868, 883, 884, 885, 905)
+        cultures$주소[a] <- c('서울특별시 광진구 자양동 704-1',
+                            '서울특별시 동대문구 신설동 114-1',
+                            '경기도 양평군 단월면 석산리 1',
+                            '서울특별시 중구 정동 세종대로 99',
+                            '서울특별시 관악구 봉천동 낙성대로3길 37',
+                            '서울특별시 중랑구 묵동 22-1',
+                            '서울특별시 성북구 종암동 54-182',
+                            '서울특별시 동작구 대방동 345-1',
+                            '서울특별시 구로구 구로동 가마산로 245',
+                            '서울특별시 은평구 녹번동 은평로 195',
+                            '서울특별시 중랑구 면목4동 378-5')
+        
+```
+</details>  
+<br>
+이제 필요한 데이터를 가져오도록 하겠습니다. ggmap의 geocode 함수를 이용하여 x,y(위경도) 좌표값을 구글에서 검색하여 불러옵니다. 이 과정에서 미리 등록된 Google API키가 필요합니다. 관련된 내용은 다음 링크들을 확인하세요. 
+<br>
+https://dangdo.tistory.com/11  
+https://jjeongil.tistory.com/371  
+https://carrot-woo.tistory.com/15
+<br><br>
+
+
+***
+```{r message = F}
+#API 키 불러오기
+register_google(key = 'AIzaSyApBuq5B24YEg3kbznd_jb1WDQ_aqu81Fk')
+```
+```{r message = F}
+#주소를 정확한 위경도 값으로 변환 - 잘못 들어간 좌표값 있음
+address <- cultures$주소
+address <- enc2utf8(address)
+latlon <- geocode(data = address, address, source = 'google')
+print(head(latlon))
+
+#좌표값 원본 데이터프레임에 cbind
+cultures <- cbind(cultures, latlon)
+```
+<br><br><br><br>
+***
+<br><br>
+##3)지도 시각화 및 데이터 확인<br><br>
+일단 필요한 전처리는 다 마쳤네요. 이제 지도에 위경도를 시각화해보겠습니다. 두 가지 패키지를 사용해 볼 건데요. 먼저 ggmap은 구글에서 필요한 지도 데이터를 가져와 활용합니다. 위에서 api키를 잘 등록했으니, 구글에서 지도를 가져와 봅시다. 가져온 후에는 plotly의 ggplotly를 활용하여 상호작용 가능한 지도로 만들 수 있습니다. color를 장르분류명(장소 타입)으로 설정하여 각 업종별로 어떻게 분포되어있는지 확인해봅시다.<br>
+
+```{r}
+#API 키 불러오기
+register_google(key = 'AIzaSyApBuq5B24YEg3kbznd_jb1WDQ_aqu81Fk')
+
+#서울 맵 가져오기
+seoul <- get_map("Seoul, South Korea", zoom=11, maptype = "roadmap")
+            
+#좌표 표시하고 업종별로 색 입히기
+seoulplot <- 
+   ggmap(seoul) +
+   geom_point(cultures, 
+              mapping = aes(x = lon, y = lat,
+              color = 장르분류명))
+
+ggplotly(seoulplot)
+
+```
+<br>
+지도가 잘 그려진 것을 확인할 수 있습니다. 커서를 이용해 해당 점의 정보를 알려주는 label도 확인 가능합니다.
+<br><br><br>
+그런데 ggmap에는 한가지 문제가 있는데, 바로 줌인 시 지도의 화질이 급격히 감소한다는 것입니다. 이럴 때는 leaflet 패키지를 활용하는 것이 좋습니다.
+<br>
+leaflet 패키지를 활용하면 상호작용 가능한(커서를 이용한 정보 확인, 줌인/줌아웃 등) 지도를 그릴 수 있습니다.  
+다음의 블로그에서 도움을 받았습니다.  
+https://m.blog.naver.com/lado135/221943436091  
+https://kuduz.tistory.com/1196  
+http://rstudio.github.io/leaflet/legends.html  
+<br>
+```{r}
+pal <- colorFactor('Paired', cultures$장르분류명) #색을 입힐 factor 변수 지정. 첫번째 인자는 Color palette.
+              
+              
+              
+            
+seoul_leaf <- leaflet(cultures) %>% 
+                addTiles() %>% 
+                setView(lng = 126.97,
+                        lat = 37.542,
+                        zoom = 11) %>% 
+                addProviderTiles('CartoDB.Positron') %>% #지도 타입 설정
+                addCircleMarkers(data = cultures %>%  #필요 데이터 가져오기
+                                 mutate(pop = paste0('공간명 : ', 문화공간명,
+                                                     '<br> 분류 : ', 장르분류명)), #레이블 값을 지정, dplyr의 mutate 문법 활용
+                               popup = ~pop, #새로 만든 변수를 popup시킴
+                               lng = ~lon, lat = ~lat, color = ~pal(장르분류명), #미리 지정해둔 color pal 가져오기
+                               radius = 3) %>% 
+                addLegend('bottomright', pal = pal, values = ~장르분류명,
+                          title = '시설 종류', opacity = 1) #legend 추가
+                
+  
+seoul_leaf     
+```
+<br>
+확실히 종로구 쪽에 많은 문화공간이 분포되어 있는 것으로 확인이 되네요.
+<br>
+다음으로는 ggplot2의 geom_bar를 이용해 실제로 구별로 어떻게 분포가 되어있는지 확인해 보고자 합니다. 그런데 문제는 '시군구'로 분류되어 있는 데이터가 존재하지 않는다는 것...<br>
+따라서 주소 변수에서 시군구 관련 내용만 추출하여 factor 변수화 시키는 작업을 하겠습니다. 
+<br>
+```{r}
+district <- c('강남구','강동구','강북구','강서구','관악구',
+              '광진구','구로구','금천구','노원구','도봉구',
+              '동대문구','동작구','마포구','서대문구','서초구',
+              '성동구','성북구','송파구','양천구','영등포구','용산구',
+              '은평구','종로구','중구','중랑구', '양평', '하남') #필요한 구 이름 가져오기
+
+str <- function(string){
+  if (T %in% str_detect(string, district) == T) {
+    
+    a <- which(str_detect(string, district) == T)
+    return(district[a])
+    
+  } else {
+    
+    return('unknown') #district 변수에 없으면 unknown 반환
+    
+  }
+}#해당 구가 주소 내용에 포함이 되어 있으면 그 구를 반환
+
+
+dist_info <- mapply(str, cultures$주소) #mapply로 함수 적용
+dist_info <- as.data.frame(dist_info) #데이터프레임화
+
+#unknown 처리된 값들 가져와서 manual하게 처리
+loc = which(dist_info$dist_info == 'unknown')
+dist_info$dist_info[loc] = c('강남구','고양','군포',
+                             '과천','포천','안양',
+                             '구리','성남','안산',
+                             '안양','의정부','과천',
+                             '남양주','부천','구로구',
+                             '파주','강남구','성남')
+
+#원본 데이터에 묶기
+cultures <- cbind(cultures, dist_info)
+print(head(cultures$dist_info))
+```
+<br><br>
+작업이 완료되었으니 이제 geom_bar를 이용해 확인해봅시다.
+<br>
+```{r}
+s <- ggplot(data = cultures,
+            mapping = aes(
+              x = dist_info,
+              fill = 장르분류명
+            ))+
+  geom_bar(position = 'dodge')+
+  theme_fivethirtyeight()+
+  theme(axis.text.x   = element_text(angle = 315, size = 5.5, family = 'MapoDPP'),
+        plot.title    = element_text(hjust = 0.5, family = 'MapoDPP'),
+        legend.text   = element_text(family = 'MapoDPP'),
+        legend.title  = element_text(family = 'MapoDPP'))+
+  ggtitle('자치구/도시 별 문화시설 분포')
+  
+
+ggplotly(s)
+```
+<br>
+예상대로 종로구가 가장 문화시설 수가 많습니다. 미술관, 박물관, 기념관이 주를 이루고 있네요. 강남구의 경우도 많은 문화시설이 있었는데, 공연장이 주를 이루고 있었습니다.<br><br><br><br>
+***
+<br><br>
+##4)K-means 군집분석<br><br>
+마지막으로 군집분석을 활용하여 문화시설이 밀집되어 있는 구역들을 식별해 보도록 하겠습니다. 위경도 좌표값을 이용하여 단순한 산점도를 그려보면 다음과 같은데요.
+```{r}
+plot(cultures$lat, cultures$lon)
+```
+<br><br>
+아까 지도에서 봤던 모습 그대로입니다. 육안으로 봤을 때는 대략 5~6개의 군집이 확인되는데요(물론 이는 교통 등의 다른 변수를 전혀 고려하지 않은 상태).  
+<br><br>한 번 군집분석을 실시해 봅시다.<br>
+먼저 일종의 이상치(?)라고 부를 수 있는 값들은 제거해줍시다(서울에서 너무 멀리 떨어진 경우).
+<br>
+이제 군집분석을 실시하겠습니다. k=6으로 지정해주고, plot도 그려봅시다.
+<br>
+```{r}
+  #일종의 이상치?인 값들은 제거하자
+  cultures <- cultures[cultures$lon < 127.6 & cultures$lat < 37.8, ]
+  
+  clstdata <- dplyr::select(cultures, lon, lat)
+  clstdata <- apply(clstdata, 2, scale)                
+  clstdata <- as.data.frame(clstdata)
+  
+  #Kmeans 실행
+  kmeans_result <- kmeans(clstdata, centers = 6, iter.max = 1000)
+  clstdata$clst <- as.factor(kmeans_result$cluster)
+
+  qplot(lon, lat, color = clst, data = clstdata)                            
+  
+```
+<br>
+종로구 근방의 군집을 어느정도 표현해 주는 듯 합니다. 이제 원본 leaflet 지도에 해당 정보를 입혀보겠습니다.
+<br><br>
+```{r}
+  #cluster 정보 입력된 plot
+  cultures$clst <- as.factor(kmeans_result$cluster) #클러스터 결과물 변수로 저장  
+  
+  
+  pal <- colorFactor('Dark2', cultures$clst)
+
+  seoul_leaf <- leaflet(cultures) %>% 
+    addTiles() %>% 
+    setView(lng = 126.97,
+            lat = 37.542,
+            zoom = 11) %>% 
+    addProviderTiles('CartoDB.Positron') %>% 
+    addCircleMarkers(data = cultures %>% 
+                       mutate(pop = paste0('공간명 : ', 문화공간명,
+                                           '<br> 분류 : ', 장르분류명,
+                                           '<br> n번째 군집 : ', clst)), #군집 정보 추가가
+                     popup = ~pop,
+                     lng = ~lon, lat = ~lat, color = ~pal(clst),
+                     radius = 3) %>% 
+    addLegend('bottomright', pal = pal, values = ~clst,
+              title = '군집 번호', opacity = 1)
+  
+  
+  seoul_leaf     
+```
+<br>
+지도에 시각화가 잘 된 것을 확인할 수 있습니다.
+<br><br><br><br>
+---<br>
+마치며<br><br>
+오늘은 서울특별시 및 근교에 위치한 문화시설들의 분포를 시각화해보는 시간을 가졌습니다. 또한 간단한 K-means 알고리즘을 접목해 서울시 내 문화시설의 cluster가 존재하는지를 살펴보았습니다.<br>
+이번 분석을 하면서 다음과 같은 아쉬움들이 남습니다.<br><br>
+하나. 더 다양한 정보를 접목한 분석의 필요성  
+: 지역별 교통 편의성, 시설 위치의 지형, 입장료, 후기 정보 등을 조금 더 고려하여 문화시설 및 해당 자치구, 클러스터에 대한 '문화시설 점수'등의 index를 매기는 후속 분석이 큰 도움이 될 것으로 보입니다.<br>
+둘. 데이터 변수의 세분화  
+: 각 문화시설에 대한 조금 더 자세한 정보들이 기입되어 있었다면 신속하고 조금 더 의미있는 분석에 큰 도움이 됐을 것이라 판단합니다.<br><br>
+***
+<br>
+그럼 긴 글 읽어주셔서 감사합니다:)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
