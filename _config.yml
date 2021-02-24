@@ -94,11 +94,11 @@ analytics:
 
 # Site Author
 author:
-  name             : "Your Name"
+  name             : "David Gu"
   avatar           : # path of avatar image, e.g. "/assets/images/bio-photo.jpg"
-  bio              : "I am an **amazing** person."
-  location         : "Somewhere"
-  email            :
+  bio              : "데이터 분석가"
+  location         : "Somewhere in Seoul"
+  email            : "davdabgu@gmail.com"
   links:
     - label: "Email"
       icon: "fas fa-fw fa-envelope-square"
